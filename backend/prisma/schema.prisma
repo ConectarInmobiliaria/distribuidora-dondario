@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int            @id @default(autoincrement())
+  name          String
+  email         String         @unique
+  password      String
+  modelHasRoles ModelHasRole[]
+  cashClosures  CashClosure[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Role {
+  id            Int            @id @default(autoincrement())
+  name          String         @unique
+  modelHasRoles ModelHasRole[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model ModelHasRole {
+  user   User @relation(fields: [userId], references: [id])
+  userId Int
+  role   Role @relation(fields: [roleId], references: [id])
+  roleId Int
+
+  @@id([userId, roleId])
+}
+
+model Zone {
+  id          Int          @id @default(autoincrement())
+  name        String
+  daysToVisit String[]
+  zoneSellers ZoneSeller[]
+  clients     Client[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Seller {
+  id          Int          @id @default(autoincrement())
+  firstName   String
+  lastName    String
+  dni         String       @unique
+  commission  Float
+  email       String       @unique
+  phone       String?
+  zoneSellers ZoneSeller[]
+  clients     Client[]
+  sales       Sale[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model ZoneSeller {
+  zone     Zone   @relation(fields: [zoneId], references: [id])
+  zoneId   Int
+  seller   Seller @relation(fields: [sellerId], references: [id])
+  sellerId Int
+
+  @@id([zoneId, sellerId])
+}
+
+model Client {
+  id           Int      @id @default(autoincrement())
+  firstName    String
+  lastName     String
+  companyName  String?
+  cuit         String   @unique
+  address      String
+  phone        String?
+  wantsInvoice Boolean  @default(false)
+  zone         Zone     @relation(fields: [zoneId], references: [id])
+  zoneId       Int
+  seller       Seller   @relation(fields: [sellerId], references: [id])
+  sellerId     Int
+  sales        Sale[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Product {
+  id                Int        @id @default(autoincrement())
+  name              String
+  sku               String     @unique
+  unitPrice         Float // precio por unidad
+  bundleSize        Int        @default(1) // unidades por bulto
+  bundleDiscountPct Float      @default(0.0) // % de descuento por bulto
+  saleItems         SaleItem[]
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+}
+
+model Sale {
+  id                 Int                 @id @default(autoincrement())
+  seller             Seller              @relation(fields: [sellerId], references: [id])
+  sellerId           Int
+  client             Client              @relation(fields: [clientId], references: [id])
+  clientId           Int
+  date               DateTime            @default(now())
+  total              Float
+  items              SaleItem[]
+  deliveryBatchItems DeliveryBatchItem[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model SaleItem {
+  id             Int      @id @default(autoincrement())
+  sale           Sale     @relation(fields: [saleId], references: [id])
+  saleId         Int
+  product        Product  @relation(fields: [productId], references: [id])
+  productId      Int
+  bundleQty      Int      @default(0)
+  unitQty        Int      @default(0)
+  returnedQty    Int      @default(0)
+  pricePerBundle Float
+  pricePerUnit   Float
+  subtotal       Float
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/// Repartidor y lotes de reparto
+model Deliverer {
+  id        Int             @id @default(autoincrement())
+  firstName String
+  lastName  String
+  phone     String
+  vehicle   String // ej. “Camioneta Ford EcoSport”
+  batches   DeliveryBatch[] // lotes asignados
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model DeliveryBatch {
+  id          Int                 @id @default(autoincrement())
+  deliverer   Deliverer           @relation(fields: [delivererId], references: [id])
+  delivererId Int
+  date        DateTime            @default(now()) // fecha de salida
+  description String?
+  items       DeliveryBatchItem[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+/// Cada item del lote: una venta asignada
+model DeliveryBatchItem {
+  id         Int           @id @default(autoincrement())
+  batch      DeliveryBatch @relation(fields: [batchId], references: [id])
+  batchId    Int
+  sale       Sale          @relation(fields: [saleId], references: [id])
+  saleId     Int
+  assignedAt DateTime      @default(now())
+  status     String        @default("pendiente") // pendiente, entregado, devuelto
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+}
+
+/// Cierre de caja diario
+model CashClosure {
+  id              Int      @id @default(autoincrement())
+  user            User     @relation(fields: [userId], references: [id])
+  userId          Int // quién cierra (admin o vendedor)
+  date            DateTime @default(now()) // fecha/hora de cierre
+  totalSales      Float // sumatoria de ventas netas
+  totalReturns    Float // sumatoria de devoluciones
+  totalAmount     Float // totalSales - totalReturns
+  totalCommission Float // comisión calculada sobre ventas netas
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
