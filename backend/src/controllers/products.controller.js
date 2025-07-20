@@ -1,7 +1,7 @@
 // backend/src/controllers/products.controller.js
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-const { nanoid } = require('nanoid');
+const { v4: uuidv4 } = require('uuid');
 
 // Listar todos los productos
 exports.list = async (req, res) => {
@@ -20,9 +20,10 @@ exports.get = async (req, res) => {
 // Crear producto
 exports.create = async (req, res) => {
   const { name, unitPrice, bundleSize, bundleDiscountPct } = req.body;
-  // Generar SKU a partir de nanoid + primeras letras del nombre
+  // Generar SKU: prefijo de 3 letras + UUID corto
   const prefix = name.replace(/\s+/g, '').slice(0, 3).toUpperCase();
-  const sku = `${prefix}-${nanoid(5).toUpperCase()}`;
+  const shortId = uuidv4().split('-')[0].toUpperCase();  
+  const sku = `${prefix}-${shortId}`;
 
   const product = await prisma.product.create({
     data: { name, sku, unitPrice, bundleSize, bundleDiscountPct }
