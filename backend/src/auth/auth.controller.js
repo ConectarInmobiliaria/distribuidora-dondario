@@ -32,14 +32,23 @@ exports.login = async (req, res) => {
       where: { email },
       include: { modelHasRoles: { include: { role: true } } }
     });
-    if (!user) return res.status(404).json({ error: 'Email no registrado' });
+    console.log('LOGIN DEBUG:', { email, found: !!user, user });
+    if (!user) {
+      console.error('Login error: Email no registrado');
+      return res.status(404).json({ error: 'Email no registrado' });
+    }
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
+    console.log('PASSWORD MATCH?', match);
+    if (!match) {
+      console.error('Login error: Contraseña incorrecta');
+      return res.status(401).json({ error: 'Contraseña incorrecta' });
+    }
 
     const payload = { sub: user.id, roles: user.modelHasRoles.map(m => m.role.name) };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
     res.json({ token });
   } catch (err) {
+    console.error('Login error:', err);
     res.status(500).json({ error: err.message });
   }
 };

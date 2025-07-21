@@ -13,17 +13,17 @@ export default function PrintPages() {
   const componentRef = useRef();
 
   // Hooks always en el mismo orden
-  const saleQuery = useQuery(
-    ['sale', id],
-    () => getSale(id).then(res => res.data),
-    { enabled: type === 'remito' }
-  );
+  const saleQuery = useQuery({
+    queryKey: ['sale', id],
+    queryFn: () => getSale(id).then(res => res.data),
+    enabled: type === 'remito'
+  });
 
-  const batchQuery = useQuery(
-    ['batch', id],
-    () => getBatch(id).then(res => res.data),
-    { enabled: type !== 'remito' }
-  );
+  const batchQuery = useQuery({
+    queryKey: ['batch', id],
+    queryFn: () => getBatch(id).then(res => res.data),
+    enabled: type !== 'remito'
+  });
 
   const dataQuery = type === 'remito' ? saleQuery : batchQuery;
 

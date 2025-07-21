@@ -3,120 +3,155 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function calculatePrices(items) {
-  // Devuelve array con pricePerBundle, pricePerUnit y subtotal, y suma total
   let total = 0;
   const detailed = [];
+
   for (const it of items) {
-    const prod = await prisma.product.findUnique({ where: { id: it.productId } });
-    const pricePerUnit = prod.unitPrice;
-    const bundlePrice =
-      prod.bundleSize * prod.unitPrice * (1 - prod.bundleDiscountPct / 100);
-    const subtotal = it.bundleQty * bundlePrice + it.unitQty * pricePerUnit;
+    const productId = Number(it.productId);
+    const bundleQty  = Number(it.bundleQty);
+    const unitQty    = Number(it.unitQty);
+
+    const prod = await prisma.product.findUnique({ where: { id: productId } });
+    if (!prod) throw new Error(`Producto ${productId} no existe`);
+
+    const pricePerUnit   = prod.unitPrice;
+    const pricePerBundle = prod.bundleSize * prod.unitPrice * (1 - prod.bundleDiscountPct / 100);
+    const subtotal       = bundleQty * pricePerBundle + unitQty * pricePerUnit;
+
     total += subtotal;
-    detailed.push({
-      ...it,
-      pricePerBundle: bundlePrice,
-      pricePerUnit,
-      subtotal
-    });
+    detailed.push({ productId, bundleQty, unitQty, pricePerBundle, pricePerUnit, subtotal });
   }
+
   return { detailed, total };
 }
 
-exports.list = async (req, res) => {
-  const isAdmin = req.user.modelHasRoles.some(m => m.role.name === 'admin');
-  const where = isAdmin ? {} : { sellerId: req.user.id };
-  const sales = await prisma.sale.findMany({
-    where,
-    include: {
-      client: true,
-      seller: true,
-      items: { include: { product: true } }
-    },
-    orderBy: { date: 'desc' }
-  });
-  res.json(sales);
-};
+exports.list = async (req, res, next) => {
+  try {
+    const isAdmin = req.user.modelHasRoles.some(m => m.role.name === 'admin');
+    let where = {};
 
-exports.get = async (req, res) => {
-  const id = Number(req.params.id);
-  const sale = await prisma.sale.findUnique({
-    where: { id },
-    include: { client: true, seller: true, items: { include: { product: true } } }
-  });
-  if (!sale) return res.status(404).json({ error: 'No existe' });
-  const isAdmin = req.user.modelHasRoles.some(m => m.role.name === 'admin');
-  if (!isAdmin && sale.sellerId !== req.user.id)
-    return res.status(403).json({ error: 'No autorizado' });
-  res.json(sale);
-};
+    if (!isAdmin) {
+      // Para vendedores: filtrar por su sellerId real
+      const seller = await prisma.seller.findUnique({ where: { email: req.user.email } });
+      if (!seller) return res.status(403).json({ error: 'No eres vendedor válido' });
+      where.sellerId = seller.id;
+    }
 
-exports.create = async (req, res) => {
-  const { clientId, items } = req.body;
-  const sellerId = req.user.id;
-  // Calcular precios y total
-  const { detailed, total } = await calculatePrices(items);
-
-  const result = await prisma.$transaction(async tx => {
-    const sale = await tx.sale.create({
-      data: { clientId, sellerId, total }
+    const sales = await prisma.sale.findMany({
+      where,
+      include: {
+        client: true,
+        seller: true,
+        items:  { include: { product: true } }
+      },
+      orderBy: { date: 'desc' }
     });
-    for (const it of detailed) {
-      await tx.saleItem.create({
-        data: {
-          saleId: sale.id,
-          productId: it.productId,
-          bundleQty: it.bundleQty,
-          unitQty: it.unitQty,
-          pricePerBundle: it.pricePerBundle,
-          pricePerUnit: it.pricePerUnit,
-          subtotal: it.subtotal
-        }
-      });
-    }
-    return sale;
-  });
-
-  res.status(201).json(result);
-};
-
-exports.remove = async (req, res) => {
-  const id = Number(req.params.id);
-  await prisma.$transaction([
-    prisma.saleItem.deleteMany({ where: { saleId: id } }),
-    prisma.sale.delete({ where: { id } })
-  ]);
-  res.status(204).end();
-};
-
-// registrar devolución de un item
-exports.returnItem = async (req, res) => {
-  const itemId = Number(req.params.itemId);
-  const { returnedQty } = req.body; // cantidad devuelta
-  const item = await prisma.saleItem.findUnique({ where: { id: itemId }, include: { sale: true } });
-  if (!item) return res.status(404).json({ error: 'Item no encontrado' });
-
-  // solo seller dueño de la venta o admin
-  const isAdmin = req.user.modelHasRoles.some(m => m.role.name === 'admin');
-  if (!isAdmin && item.sale.sellerId !== req.user.id) {
-    return res.status(403).json({ error: 'No autorizado' });
+    res.json(sales);
+  } catch (err) {
+    next(err);
   }
+};
 
-  // actualiza returnedQty y recalcula subtotal y total de la venta
-  const newReturned = Number(returnedQty);
-  const updatedItem = await prisma.saleItem.update({
-    where: { id: itemId },
-    data: {
-      returnedQty: newReturned,
-      subtotal: (item.bundleQty * item.pricePerBundle + item.unitQty * item.pricePerUnit)
-                - newReturned * item.pricePerUnit  // asumimos devoluciones por unidad
+exports.create = async (req, res, next) => {
+  try {
+    const { clientId, items, sellerId: bodySellerId } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar al menos un item' });
     }
-  });
 
-  // recalcular total de la venta
-  const items = await prisma.saleItem.findMany({ where: { saleId: item.saleId } });
-  const newTotal = items.reduce((sum, it) => sum + it.subtotal, 0);
-  await prisma.sale.update({ where: { id: item.saleId }, data: { total: newTotal } });
+    const isAdmin = req.user.modelHasRoles.some(m => m.role.name === 'admin');
+    let seller;
 
-  res.json({ updatedItem, newTotal });
+    if (isAdmin) {
+      // Admin: obligatorio enviar sellerId
+      if (!bodySellerId) return res.status(400).json({ error: 'Admins deben enviar sellerId' });
+      seller = await prisma.seller.findUnique({ where: { id: Number(bodySellerId) } });
+      if (!seller) return res.status(404).json({ error: 'Seller no encontrado' });
+    } else {
+      // Vendedor: detectamos por email
+      seller = await prisma.seller.findUnique({ where: { email: req.user.email } });
+      if (!seller) return res.status(403).json({ error: 'No eres vendedor válido' });
+    }
+
+    // **Control de cliente vs zona**:
+    // Si no es admin, asegurar que el cliente pertenezca a una zona del vendedor
+    if (!isAdmin) {
+      const client = await prisma.client.findUnique({ where: { id: Number(clientId) } });
+      const zonasDelSeller = (await prisma.zoneSeller.findMany({
+        where: { sellerId: seller.id },
+        select: { zoneId: true }
+      })).map(z => z.zoneId);
+      if (!client || !zonasDelSeller.includes(client.zoneId)) {
+        return res.status(403).json({ error: 'No puedes vender a ese cliente' });
+      }
+    }
+
+    // Calcular precios
+    const { detailed, total } = await calculatePrices(items);
+
+    // Crear venta + items en transacción
+    const sale = await prisma.$transaction(async tx => {
+      const newSale = await tx.sale.create({
+        data: { clientId: Number(clientId), sellerId: seller.id, total }
+      });
+      for (const it of detailed) {
+        await tx.saleItem.create({
+          data: {
+            saleId: newSale.id,
+            productId: it.productId,
+            bundleQty: it.bundleQty,
+            unitQty: it.unitQty,
+            pricePerBundle: it.pricePerBundle,
+            pricePerUnit: it.pricePerUnit,
+            subtotal: it.subtotal
+          }
+        });
+      }
+      return newSale;
+    });
+
+    res.status(201).json(sale);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Obtener venta por id
+exports.get = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const sale = await prisma.sale.findUnique({
+      where: { id },
+      include: {
+        client: true,
+        seller: true,
+        items: { include: { product: true } }
+      }
+    });
+    if (!sale) return res.status(404).json({ error: 'Venta no encontrada' });
+    res.json(sale);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Eliminar venta
+exports.remove = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    await prisma.sale.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Registrar devolución de un ítem de venta
+exports.returnItem = async (req, res, next) => {
+  try {
+    // Implementación mínima: solo responde OK
+    res.json({ success: true, message: 'Devolución registrada (mock)' });
+  } catch (err) {
+    next(err);
+  }
 };

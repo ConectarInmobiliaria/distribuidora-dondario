@@ -1,11 +1,15 @@
 // backend/src/index.js
 require('dotenv').config();
+const morgan = require('morgan');
 const express = require('express');
 const cors = require('cors');
 const passport = require('passport');
 const authRoutes = require('./auth/auth.routes');
 
+
+
 const app = express();
+app.use(morgan('combined')); 
 app.use(cors());
 app.use(express.json());
 
@@ -51,3 +55,10 @@ app.get('/', (req, res) => res.json({ message: 'API Don Darío OK' }));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`API escuchando en http://localhost:${PORT}`));
+app.use((err, req, res, next) => {
+  console.error(err.stack);                // sale en pm2 logs
+  res.status(500).json({                    // responde JSON con mensaje y stack (en dev)
+    error: err.message,
+    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
+  });
+});
